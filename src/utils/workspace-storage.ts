@@ -1,18 +1,17 @@
 import type { ShapeData } from '../constants/pixel-shape';
 import { MAX_ZOOM, MIN_ZOOM } from '../constants/pixel-shape';
+import {
+  getPersistedWorkspace,
+  type PersistedWorkspace,
+  useWorkspaceStore,
+} from '../stores/workspace-store';
 
 const STORAGE_KEY = 'pixel-shape-workspace';
 const VERSION = 1;
+const DEBOUNCE_MS = 400;
 
-export interface WorkspaceState {
-  version: number;
-  shapes: ShapeData[];
-  selectedShapeId: number | null;
-  zoom: number;
-  canvasOffset: { x: number; y: number };
-  isControlsPanelOpen: boolean;
-  isShapeListOpen: boolean;
-}
+// Re-export type for external use
+export type { PersistedWorkspace as WorkspaceState };
 
 /**
  * Validates that a shape has all required fields with correct types.
@@ -52,7 +51,7 @@ function clamp(value: number, min: number, max: number): number {
  * Loads workspace state from localStorage.
  * Returns null if storage is empty, corrupt, or unavailable.
  */
-export function loadWorkspace(): WorkspaceState | null {
+export function loadWorkspace(): PersistedWorkspace | null {
   if (typeof window === 'undefined') return null;
 
   try {
@@ -84,23 +83,6 @@ export function loadWorkspace(): WorkspaceState | null {
         ? { x: parsed.canvasOffset.x, y: parsed.canvasOffset.y }
         : { x: 0, y: 0 };
 
-    // Validate selectedShapeId - must exist in shapes or fall back to first shape
-    let selectedShapeId: number | null = null;
-    if (typeof parsed.selectedShapeId === 'number') {
-      const exists = validShapes.some(
-        (s: ShapeData) => s.id === parsed.selectedShapeId
-      );
-      if (exists) {
-        selectedShapeId = parsed.selectedShapeId;
-      } else if (validShapes.length > 0) {
-        // Fall back to first shape if stored selection is invalid
-        selectedShapeId = validShapes[0].id;
-      }
-    } else if (validShapes.length > 0) {
-      // If no selection stored but shapes exist, select first
-      selectedShapeId = validShapes[0].id;
-    }
-
     // Validate booleans with defaults
     const isControlsPanelOpen =
       typeof parsed.isControlsPanelOpen === 'boolean'
@@ -114,7 +96,6 @@ export function loadWorkspace(): WorkspaceState | null {
     return {
       version: VERSION,
       shapes: validShapes,
-      selectedShapeId,
       zoom,
       canvasOffset,
       isControlsPanelOpen,
@@ -129,14 +110,13 @@ export function loadWorkspace(): WorkspaceState | null {
 /**
  * Saves workspace state to localStorage.
  */
-export function saveWorkspace(state: WorkspaceState): void {
+export function saveWorkspace(state: PersistedWorkspace): void {
   if (typeof window === 'undefined') return;
 
   try {
-    const payload: WorkspaceState = {
+    const payload: PersistedWorkspace = {
       version: VERSION,
       shapes: state.shapes,
-      selectedShapeId: state.selectedShapeId,
       zoom: clamp(state.zoom, MIN_ZOOM, MAX_ZOOM),
       canvasOffset: state.canvasOffset,
       isControlsPanelOpen: state.isControlsPanelOpen,
@@ -147,4 +127,51 @@ export function saveWorkspace(state: WorkspaceState): void {
   } catch (error) {
     console.warn('Failed to save workspace to localStorage', error);
   }
+}
+
+/**
+ * Initializes the workspace store from localStorage and sets up
+ * debounced persistence on state changes.
+ * Call this once at app startup.
+ */
+export function initWorkspacePersistence(): () => void {
+  // Hydrate store from localStorage
+  const persisted = loadWorkspace();
+  if (persisted) {
+    useWorkspaceStore.getState().hydrate(persisted);
+  }
+
+  // Set up debounced persistence
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Subscribe to all state changes (debounced save handles frequency)
+  const unsubscribe = useWorkspaceStore.subscribe((state, prevState) => {
+    // Only save if relevant state changed
+    const shapesChanged = state.shapeState !== prevState.shapeState;
+    const viewChanged =
+      state.zoom !== prevState.zoom ||
+      state.canvasOffset !== prevState.canvasOffset;
+    const uiChanged =
+      state.isControlsPanelOpen !== prevState.isControlsPanelOpen ||
+      state.isShapeListOpen !== prevState.isShapeListOpen;
+
+    if (!shapesChanged && !viewChanged && !uiChanged) {
+      return;
+    }
+
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = setTimeout(() => {
+      saveWorkspace(getPersistedWorkspace());
+    }, DEBOUNCE_MS);
+  });
+
+  // Return cleanup function
+  return () => {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+    unsubscribe();
+  };
 }

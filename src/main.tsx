@@ -8,6 +8,10 @@ import { routeTree } from "./routeTree.gen";
 import reportWebVitals from "./reportWebVitals.ts";
 import "./styles.css";
 
+// Initialize workspace persistence before React renders
+import { initWorkspacePersistence } from "./utils/workspace-storage";
+initWorkspacePersistence();
+
 // Create a new router instance
 const router = createRouter({
   routeTree,

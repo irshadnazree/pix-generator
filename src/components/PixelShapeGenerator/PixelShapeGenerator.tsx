@@ -1,90 +1,134 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo } from 'react';
+import { useShallow } from 'zustand/shallow';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useCanvasInteraction } from '../../hooks/useCanvasInteraction';
-import { useShapeManagement } from '../../hooks/useShapeManagement';
 import {
-  loadWorkspace,
-  saveWorkspace,
-  type WorkspaceState,
-} from '../../utils/workspace-storage';
+  selectIsEditing,
+  selectSelectedShape,
+  useWorkspaceStore,
+} from '../../stores/workspace-store';
 import { DarkModeToggle } from '../ui/DarkModeToggle';
 import { FloatingCard } from '../ui/FloatingCard';
 import { CanvasArea } from './CanvasArea';
 import { ControlsPanel } from './ControlsPanel';
 import { ShapeList } from './ShapeList';
 
-const DEBOUNCE_MS = 400;
-
 export default function PixelShapeGenerator() {
   const { isDarkMode } = useTheme();
 
-  // Load workspace once on mount (lazy init to avoid overwrite-on-mount bug)
-  const initialWorkspace = useMemo(() => loadWorkspace(), []);
-
-  // Card states - hydrated from workspace
-  const [isControlsPanelOpen, setIsControlsPanelOpen] = useState(
-    () => initialWorkspace?.isControlsPanelOpen ?? false
+  // Read initial view values once (not subscribed)
+  // Note: Persistence is initialized in main.tsx before React renders
+  const initialView = useMemo(
+    () => ({
+      zoom: useWorkspaceStore.getState().zoom,
+      canvasOffset: useWorkspaceStore.getState().canvasOffset,
+    }),
+    []
   );
-  const [isShapeListOpen, setIsShapeListOpen] = useState(
-    () => initialWorkspace?.isShapeListOpen ?? false
+
+  // Read shapes with shallow comparison to avoid new array references
+  const shapes = useWorkspaceStore(
+    useShallow((s) => s.shapeState.ids.map((id) => s.shapeState.entities[id]))
   );
 
-  // Shape management hook - hydrated from workspace
-  const shapeManagement = useShapeManagement({
-    initialShapes: initialWorkspace?.shapes ?? [],
-    initialSelectedShapeId: initialWorkspace?.selectedShapeId ?? null,
-  });
+  const selectedShapeId = useWorkspaceStore((s) => s.selectedShapeId);
+  const selectedShapeObject = useWorkspaceStore(selectSelectedShape);
+  const isEditing = useWorkspaceStore(selectIsEditing);
 
-  // Canvas interaction hook - hydrated from workspace
+  const currentShapeType = useWorkspaceStore((s) => s.currentShapeType);
+  const formWidth = useWorkspaceStore((s) => s.formWidth);
+  const formHeight = useWorkspaceStore((s) => s.formHeight);
+  const formBaseColor = useWorkspaceStore((s) => s.formBaseColor);
+  const formOpacity = useWorkspaceStore((s) => s.formOpacity);
+
+  const isControlsPanelOpen = useWorkspaceStore((s) => s.isControlsPanelOpen);
+  const isShapeListOpen = useWorkspaceStore((s) => s.isShapeListOpen);
+
+  // Actions from store
+  const setSelectedShapeId = useWorkspaceStore((s) => s.setSelectedShapeId);
+  const moveShape = useWorkspaceStore((s) => s.moveShape);
+  const addShape = useWorkspaceStore((s) => s.addShape);
+  const updateSelectedShape = useWorkspaceStore((s) => s.updateSelectedShape);
+  const removeShape = useWorkspaceStore((s) => s.removeShape);
+  const moveShapeLayer = useWorkspaceStore((s) => s.moveShapeLayer);
+  const reorderShapes = useWorkspaceStore((s) => s.reorderShapes);
+
+  const setCurrentShapeType = useWorkspaceStore((s) => s.setCurrentShapeType);
+  const setFormWidth = useWorkspaceStore((s) => s.setFormWidth);
+  const setFormHeight = useWorkspaceStore((s) => s.setFormHeight);
+  const setFormBaseColor = useWorkspaceStore((s) => s.setFormBaseColor);
+  const setFormOpacity = useWorkspaceStore((s) => s.setFormOpacity);
+
+  const updateView = useWorkspaceStore((s) => s.updateView);
+  const storeResetView = useWorkspaceStore((s) => s.resetView);
+
+  const toggleControlsPanel = useWorkspaceStore((s) => s.toggleControlsPanel);
+  const toggleShapeList = useWorkspaceStore((s) => s.toggleShapeList);
+
+  // Canvas interaction hook - uses initial values, notifies store on changes
   const canvasInteraction = useCanvasInteraction({
-    shapes: shapeManagement.shapes,
-    selectedShapeId: shapeManagement.selectedShapeId,
-    onShapeSelect: shapeManagement.setSelectedShapeId,
-    onShapeMove: shapeManagement.moveShape,
-    initialZoom: initialWorkspace?.zoom ?? 10,
-    initialCanvasOffset: initialWorkspace?.canvasOffset ?? { x: 0, y: 0 },
+    shapes,
+    selectedShapeId,
+    onShapeSelect: setSelectedShapeId,
+    onShapeMove: moveShape,
+    initialZoom: initialView.zoom,
+    initialCanvasOffset: initialView.canvasOffset,
+    onViewChange: updateView,
   });
 
-  // Debounced persistence
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    // Clear any pending save
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
+  // Reset view handler - uses store's resetView
+  const handleResetView = useCallback(() => {
+    const container = canvasInteraction.viewportContainerRef.current;
+    if (container) {
+      const { width, height } = container.getBoundingClientRect();
+      storeResetView(width, height);
     }
+    canvasInteraction.resetView();
+  }, [canvasInteraction, storeResetView]);
 
-    // Schedule a debounced save
-    debounceRef.current = setTimeout(() => {
-      const workspace: WorkspaceState = {
-        version: 1,
-        shapes: shapeManagement.shapes,
-        selectedShapeId: shapeManagement.selectedShapeId,
-        zoom: canvasInteraction.zoom,
-        canvasOffset: canvasInteraction.canvasOffset,
-        isControlsPanelOpen,
-        isShapeListOpen,
-      };
-      saveWorkspace(workspace);
-    }, DEBOUNCE_MS);
-
-    // Cleanup on unmount or dependency change
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
+  // Form handlers
+  const handleWidthChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value.trim();
+      if (value === '') {
+        setFormWidth(null);
+      } else {
+        const numValue = parseInt(value, 10);
+        setFormWidth(Number.isNaN(numValue) ? null : numValue);
       }
-    };
-  }, [
-    shapeManagement.shapes,
-    shapeManagement.selectedShapeId,
-    canvasInteraction.zoom,
-    canvasInteraction.canvasOffset,
-    isControlsPanelOpen,
-    isShapeListOpen,
-  ]);
+    },
+    [setFormWidth]
+  );
+
+  const handleHeightChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value.trim();
+      if (value === '') {
+        setFormHeight(null);
+      } else {
+        const numValue = parseInt(value, 10);
+        setFormHeight(Number.isNaN(numValue) ? null : numValue);
+      }
+    },
+    [setFormHeight]
+  );
+
+  const handleColorChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setFormBaseColor(e.target.value);
+    },
+    [setFormBaseColor]
+  );
+
+  const handleOpacityChange = useCallback(
+    (value: number[]) => {
+      setFormOpacity(value[0]);
+    },
+    [setFormOpacity]
+  );
 
   // Function to calculate new shape position
-  const getNewShapePosition = () => {
+  const getNewShapePosition = useCallback(() => {
     let initialX = 50;
     let initialY = 50;
 
@@ -93,14 +137,30 @@ export default function PixelShapeGenerator() {
         canvasInteraction.viewportContainerRef.current.getBoundingClientRect();
       initialX =
         (cw / 2 - canvasInteraction.canvasOffset.x) / canvasInteraction.zoom -
-        (shapeManagement.width ?? 0) / 2;
+        (formWidth ?? 0) / 2;
       initialY =
         (ch / 2 - canvasInteraction.canvasOffset.y) / canvasInteraction.zoom -
-        (shapeManagement.height ?? 0) / 2;
+        (formHeight ?? 0) / 2;
     }
 
     return { x: initialX, y: initialY };
-  };
+  }, [canvasInteraction, formWidth, formHeight]);
+
+  // Form submit handler
+  const handleFormSubmit = useCallback(() => {
+    if (isEditing) {
+      const success = updateSelectedShape();
+      if (!success) {
+        alert('Cannot update shape: Width and height must be positive numbers');
+      }
+    } else {
+      const position = getNewShapePosition();
+      const success = addShape(position);
+      if (!success) {
+        alert('Cannot add shape: Width and height must be positive numbers');
+      }
+    }
+  }, [isEditing, updateSelectedShape, addShape, getNewShapePosition]);
 
   return (
     <div
@@ -116,26 +176,24 @@ export default function PixelShapeGenerator() {
       <FloatingCard
         title='Shape Controls'
         isOpen={isControlsPanelOpen}
-        onToggle={() => setIsControlsPanelOpen(!isControlsPanelOpen)}
+        onToggle={toggleControlsPanel}
         position='left'
         defaultPosition={{ x: 20, y: 100 }}
       >
         <ControlsPanel
-          currentShapeType={shapeManagement.currentShapeType}
-          width={shapeManagement.width}
-          height={shapeManagement.height}
-          currentShapeBaseColor={shapeManagement.currentShapeBaseColor}
-          currentShapeOpacity={shapeManagement.currentShapeOpacity}
-          isEditing={shapeManagement.isEditing}
-          selectedShapeObject={shapeManagement.selectedShapeObject}
-          onShapeTypeChange={shapeManagement.handleShapeTypeChange}
-          onWidthChange={shapeManagement.handleWidthChange}
-          onHeightChange={shapeManagement.handleHeightChange}
-          onColorChange={shapeManagement.handleColorChange}
-          onOpacityChange={shapeManagement.handleOpacityChange}
-          onFormSubmit={() =>
-            shapeManagement.handleFormSubmit(getNewShapePosition)
-          }
+          currentShapeType={currentShapeType}
+          width={formWidth}
+          height={formHeight}
+          currentShapeBaseColor={formBaseColor}
+          currentShapeOpacity={formOpacity}
+          isEditing={isEditing}
+          selectedShapeObject={selectedShapeObject}
+          onShapeTypeChange={setCurrentShapeType}
+          onWidthChange={handleWidthChange}
+          onHeightChange={handleHeightChange}
+          onColorChange={handleColorChange}
+          onOpacityChange={handleOpacityChange}
+          onFormSubmit={handleFormSubmit}
         />
       </FloatingCard>
 
@@ -143,16 +201,16 @@ export default function PixelShapeGenerator() {
       <FloatingCard
         title='Shape List'
         isOpen={isShapeListOpen}
-        onToggle={() => setIsShapeListOpen(!isShapeListOpen)}
+        onToggle={toggleShapeList}
         position='right'
       >
         <ShapeList
-          shapes={shapeManagement.shapes}
-          selectedShapeId={shapeManagement.selectedShapeId}
-          onShapeSelect={shapeManagement.setSelectedShapeId}
-          onRemoveShape={shapeManagement.removeShape}
-          onMoveShapeLayer={shapeManagement.handleMoveShapeLayer}
-          onReorderShapes={shapeManagement.reorderShapes}
+          shapes={shapes}
+          selectedShapeId={selectedShapeId}
+          onShapeSelect={setSelectedShapeId}
+          onRemoveShape={removeShape}
+          onMoveShapeLayer={moveShapeLayer}
+          onReorderShapes={reorderShapes}
         />
       </FloatingCard>
 
@@ -161,14 +219,14 @@ export default function PixelShapeGenerator() {
         viewportContainerRef={canvasInteraction.viewportContainerRef}
         zoom={canvasInteraction.zoom}
         canvasOffset={canvasInteraction.canvasOffset}
-        shapes={shapeManagement.shapes}
-        selectedShapeId={shapeManagement.selectedShapeId}
+        shapes={shapes}
+        selectedShapeId={selectedShapeId}
         snappingGuides={canvasInteraction.snappingGuides}
         isDraggingShape={canvasInteraction.isDraggingShape}
         isPanning={canvasInteraction.isPanning}
         visualDragPosition={canvasInteraction.visualDragPosition}
         onPointerDown={canvasInteraction.handlePointerDown}
-        onResetView={canvasInteraction.resetView}
+        onResetView={handleResetView}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import type { ShapeData, SnappingGuide } from "../../constants/pixel-shape";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useViewportSize } from "../../hooks/pixel-shape";
@@ -15,7 +15,7 @@ interface CanvasAreaProps {
 	isDraggingShape: boolean;
 	isPanning: boolean;
 	visualDragPosition: { x: number; y: number } | null;
-	onPointerDown: (e: React.MouseEvent | React.TouchEvent) => void;
+	onPointerDown: (e: MouseEvent | TouchEvent) => void;
 	onResetView: () => void;
 }
 
@@ -35,6 +35,25 @@ export const CanvasArea = React.memo<CanvasAreaProps>(
 	}) => {
 		const viewportSize = useViewportSize(viewportContainerRef);
 		const { isDarkMode } = useTheme();
+
+		// Attach touch/mouse events with { passive: false } to allow preventDefault
+		useEffect(() => {
+			const container = viewportContainerRef.current;
+			if (!container) return;
+
+			const handleMouseDown = (e: MouseEvent) => onPointerDown(e);
+			const handleTouchStart = (e: TouchEvent) => onPointerDown(e);
+
+			container.addEventListener("mousedown", handleMouseDown);
+			container.addEventListener("touchstart", handleTouchStart, {
+				passive: false,
+			});
+
+			return () => {
+				container.removeEventListener("mousedown", handleMouseDown);
+				container.removeEventListener("touchstart", handleTouchStart);
+			};
+		}, [viewportContainerRef, onPointerDown]);
 
 		const getCursor = () => {
 			if (isPanning) return "grabbing";
@@ -82,18 +101,16 @@ export const CanvasArea = React.memo<CanvasAreaProps>(
             flex-1 relative overflow-hidden touch-none select-none
             ${isDarkMode ? "bg-gray-900" : "bg-gray-50"}
           `}
-					style={{
-						cursor: getCursor(),
-						touchAction: "none",
-						WebkitUserSelect: "none",
-						MozUserSelect: "none",
-						msUserSelect: "none",
-						userSelect: "none",
-					}}
-					onMouseDown={onPointerDown}
-					onTouchStart={onPointerDown}
-					onContextMenu={(e) => e.preventDefault()}
-				>
+				style={{
+					cursor: getCursor(),
+					touchAction: "none",
+					WebkitUserSelect: "none",
+					MozUserSelect: "none",
+					msUserSelect: "none",
+					userSelect: "none",
+				}}
+				onContextMenu={(e) => e.preventDefault()}
+			>
 					<div
 						className="absolute w-full h-full"
 						style={{

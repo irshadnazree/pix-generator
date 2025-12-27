@@ -16,6 +16,7 @@ interface UseCanvasInteractionProps {
   onShapeMove: (id: number, position: { x: number; y: number }) => void;
   initialZoom?: number;
   initialCanvasOffset?: { x: number; y: number };
+  onViewChange?: (zoom: number, offset: { x: number; y: number }) => void;
 }
 
 interface CanvasInteractionState {
@@ -46,6 +47,7 @@ export const useCanvasInteraction = ({
   onShapeMove,
   initialZoom = 10,
   initialCanvasOffset = { x: 0, y: 0 },
+  onViewChange,
 }: UseCanvasInteractionProps) => {
   // Canvas state
   const [state, setState] = useState<CanvasInteractionState>(() => ({
@@ -271,7 +273,7 @@ export const useCanvasInteraction = ({
 
   // Handle pointer down
   const handlePointerDown = useCallback(
-    (e: React.MouseEvent | React.TouchEvent) => {
+    (e: MouseEvent | TouchEvent) => {
       if (!viewportContainerRef.current) return;
 
       e.preventDefault();
@@ -833,6 +835,24 @@ export const useCanvasInteraction = ({
       container.removeEventListener('wheel', handleWheelZoomInternal);
     };
   }, [handleWheelZoomInternal]);
+
+  // Notify parent when zoom/offset changes (for persistence)
+  const prevZoomRef = useRef(state.zoom);
+  const prevOffsetRef = useRef(state.canvasOffset);
+
+  useEffect(() => {
+    const zoomChanged = state.zoom !== prevZoomRef.current;
+    const offsetChanged =
+      state.canvasOffset.x !== prevOffsetRef.current.x ||
+      state.canvasOffset.y !== prevOffsetRef.current.y;
+
+    if ((zoomChanged || offsetChanged) && onViewChange) {
+      onViewChange(state.zoom, state.canvasOffset);
+    }
+
+    prevZoomRef.current = state.zoom;
+    prevOffsetRef.current = state.canvasOffset;
+  }, [state.zoom, state.canvasOffset, onViewChange]);
 
   return {
     ...state,
