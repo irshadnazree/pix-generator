@@ -1,30 +1,87 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useCanvasInteraction } from '../../hooks/useCanvasInteraction';
 import { useShapeManagement } from '../../hooks/useShapeManagement';
+import {
+  loadWorkspace,
+  saveWorkspace,
+  type WorkspaceState,
+} from '../../utils/workspace-storage';
 import { DarkModeToggle } from '../ui/DarkModeToggle';
 import { FloatingCard } from '../ui/FloatingCard';
 import { CanvasArea } from './CanvasArea';
 import { ControlsPanel } from './ControlsPanel';
 import { ShapeList } from './ShapeList';
 
+const DEBOUNCE_MS = 400;
+
 export default function PixelShapeGenerator() {
   const { isDarkMode } = useTheme();
 
-  // Card states
-  const [isControlsPanelOpen, setIsControlsPanelOpen] = useState(false);
-  const [isShapeListOpen, setIsShapeListOpen] = useState(false);
+  // Load workspace once on mount (lazy init to avoid overwrite-on-mount bug)
+  const initialWorkspace = useMemo(() => loadWorkspace(), []);
 
-  // Shape management hook
-  const shapeManagement = useShapeManagement();
+  // Card states - hydrated from workspace
+  const [isControlsPanelOpen, setIsControlsPanelOpen] = useState(
+    () => initialWorkspace?.isControlsPanelOpen ?? false
+  );
+  const [isShapeListOpen, setIsShapeListOpen] = useState(
+    () => initialWorkspace?.isShapeListOpen ?? false
+  );
 
-  // Canvas interaction hook
+  // Shape management hook - hydrated from workspace
+  const shapeManagement = useShapeManagement({
+    initialShapes: initialWorkspace?.shapes ?? [],
+    initialSelectedShapeId: initialWorkspace?.selectedShapeId ?? null,
+  });
+
+  // Canvas interaction hook - hydrated from workspace
   const canvasInteraction = useCanvasInteraction({
     shapes: shapeManagement.shapes,
     selectedShapeId: shapeManagement.selectedShapeId,
     onShapeSelect: shapeManagement.setSelectedShapeId,
     onShapeMove: shapeManagement.moveShape,
+    initialZoom: initialWorkspace?.zoom ?? 10,
+    initialCanvasOffset: initialWorkspace?.canvasOffset ?? { x: 0, y: 0 },
   });
+
+  // Debounced persistence
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    // Clear any pending save
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // Schedule a debounced save
+    debounceRef.current = setTimeout(() => {
+      const workspace: WorkspaceState = {
+        version: 1,
+        shapes: shapeManagement.shapes,
+        selectedShapeId: shapeManagement.selectedShapeId,
+        zoom: canvasInteraction.zoom,
+        canvasOffset: canvasInteraction.canvasOffset,
+        isControlsPanelOpen,
+        isShapeListOpen,
+      };
+      saveWorkspace(workspace);
+    }, DEBOUNCE_MS);
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, [
+    shapeManagement.shapes,
+    shapeManagement.selectedShapeId,
+    canvasInteraction.zoom,
+    canvasInteraction.canvasOffset,
+    isControlsPanelOpen,
+    isShapeListOpen,
+  ]);
 
   // Function to calculate new shape position
   const getNewShapePosition = () => {
@@ -111,10 +168,7 @@ export default function PixelShapeGenerator() {
         isPanning={canvasInteraction.isPanning}
         visualDragPosition={canvasInteraction.visualDragPosition}
         onPointerDown={canvasInteraction.handlePointerDown}
-        onResetView={() => {
-          canvasInteraction.resetView();
-          shapeManagement.resetFormToDefaults();
-        }}
+        onResetView={canvasInteraction.resetView}
       />
     </div>
   );

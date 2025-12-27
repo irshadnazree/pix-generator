@@ -7,13 +7,36 @@ interface NormalizedShapes {
   entities: Record<number, ShapeData>;
 }
 
-export const useShapeManagement = () => {
+export interface UseShapeManagementOptions {
+  initialShapes?: ShapeData[];
+  initialSelectedShapeId?: number | null;
+}
+
+/**
+ * Converts a shapes array to normalized state.
+ */
+function normalizeShapes(shapes: ShapeData[]): NormalizedShapes {
+  const ids: number[] = [];
+  const entities: Record<number, ShapeData> = {};
+
+  for (const shape of shapes) {
+    ids.push(shape.id);
+    entities[shape.id] = shape;
+  }
+
+  return { ids, entities };
+}
+
+export const useShapeManagement = (options: UseShapeManagementOptions = {}) => {
+  const { initialShapes = [], initialSelectedShapeId = null } = options;
+
   // Normalized shape data - O(1) lookups and efficient updates
-  const [shapeState, setShapeState] = useState<NormalizedShapes>({
-    ids: [],
-    entities: {},
-  });
-  const [selectedShapeId, setSelectedShapeId] = useState<number | null>(null);
+  const [shapeState, setShapeState] = useState<NormalizedShapes>(() =>
+    normalizeShapes(initialShapes)
+  );
+  const [selectedShapeId, setSelectedShapeId] = useState<number | null>(
+    () => initialSelectedShapeId
+  );
 
   // Form state
   const [currentShapeType, setCurrentShapeType] =

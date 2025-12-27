@@ -14,6 +14,8 @@ interface UseCanvasInteractionProps {
   selectedShapeId: number | null;
   onShapeSelect: (id: number | null) => void;
   onShapeMove: (id: number, position: { x: number; y: number }) => void;
+  initialZoom?: number;
+  initialCanvasOffset?: { x: number; y: number };
 }
 
 interface CanvasInteractionState {
@@ -42,11 +44,13 @@ export const useCanvasInteraction = ({
   selectedShapeId,
   onShapeSelect,
   onShapeMove,
+  initialZoom = 10,
+  initialCanvasOffset = { x: 0, y: 0 },
 }: UseCanvasInteractionProps) => {
   // Canvas state
-  const [state, setState] = useState<CanvasInteractionState>({
-    zoom: 10,
-    canvasOffset: { x: 0, y: 0 },
+  const [state, setState] = useState<CanvasInteractionState>(() => ({
+    zoom: initialZoom,
+    canvasOffset: initialCanvasOffset,
     isDraggingShape: false,
     isPanning: false,
     snappingGuides: [],
@@ -54,7 +58,7 @@ export const useCanvasInteraction = ({
     hasMoved: false,
     isSpacePressed: false,
     visualDragPosition: null,
-  });
+  }));
 
   // Interaction state - using refs for high-frequency updates to avoid re-renders
   const pointerStartPosRef = useRef({ x: 0, y: 0 });
@@ -95,9 +99,60 @@ export const useCanvasInteraction = ({
   );
 
   const resetView = useCallback(() => {
-    setState({
-      zoom: 10,
-      canvasOffset: { x: 0, y: 0 },
+    // Calculate fit + center based on shapes
+    const container = viewportContainerRef.current;
+    const PADDING = 50; // Padding around shapes in screen pixels
+
+    let newZoom = 10;
+    let newOffset = { x: 0, y: 0 };
+
+    if (shapes.length > 0 && container) {
+      const { width: viewportW, height: viewportH } =
+        container.getBoundingClientRect();
+
+      // Compute world bounds from shapes
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      for (const shape of shapes) {
+        minX = Math.min(minX, shape.position.x);
+        minY = Math.min(minY, shape.position.y);
+        maxX = Math.max(maxX, shape.position.x + shape.width);
+        maxY = Math.max(maxY, shape.position.y + shape.height);
+      }
+
+      const worldW = maxX - minX;
+      const worldH = maxY - minY;
+
+      if (worldW > 0 && worldH > 0) {
+        // Available viewport space minus padding
+        const availableW = Math.max(1, viewportW - 2 * PADDING);
+        const availableH = Math.max(1, viewportH - 2 * PADDING);
+
+        // Zoom to fit
+        const zoomToFitW = availableW / worldW;
+        const zoomToFitH = availableH / worldH;
+        newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(zoomToFitW, zoomToFitH)));
+
+        // Center the shapes
+        const worldCenterX = (minX + maxX) / 2;
+        const worldCenterY = (minY + maxY) / 2;
+        const viewportCenterX = viewportW / 2;
+        const viewportCenterY = viewportH / 2;
+
+        newOffset = {
+          x: viewportCenterX - worldCenterX * newZoom,
+          y: viewportCenterY - worldCenterY * newZoom,
+        };
+      }
+    }
+
+    setState((prev) => ({
+      ...prev,
+      zoom: newZoom,
+      canvasOffset: newOffset,
       isDraggingShape: false,
       isPanning: false,
       snappingGuides: [],
@@ -105,9 +160,9 @@ export const useCanvasInteraction = ({
       hasMoved: false,
       isSpacePressed: false,
       visualDragPosition: null,
-    });
-    onShapeSelect(null);
-  }, [onShapeSelect]);
+    }));
+    // Note: Selection is preserved (no onShapeSelect(null) call)
+  }, [shapes]);
 
   // Enhanced zoom function with smooth animation
   const smoothZoom = useCallback(
