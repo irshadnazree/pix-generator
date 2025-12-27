@@ -25,6 +25,7 @@ interface CanvasInteractionState {
   isPointerDown: boolean;
   hasMoved: boolean;
   isSpacePressed: boolean;
+  visualDragPosition: { x: number; y: number } | null;
 }
 
 interface TouchState {
@@ -52,12 +53,13 @@ export const useCanvasInteraction = ({
     isPointerDown: false,
     hasMoved: false,
     isSpacePressed: false,
+    visualDragPosition: null,
   });
 
-  // Interaction state
-  const [pointerStartPos, setPointerStartPos] = useState({ x: 0, y: 0 });
-  const [lastClickTime, setLastClickTime] = useState(0);
-  const [touchState, setTouchState] = useState<TouchState>({
+  // Interaction state - using refs for high-frequency updates to avoid re-renders
+  const pointerStartPosRef = useRef({ x: 0, y: 0 });
+  const lastClickTimeRef = useRef(0);
+  const touchStateRef = useRef<TouchState>({
     lastTouchDistance: 0,
     initialZoom: 10,
     initialOffset: { x: 0, y: 0 },
@@ -71,6 +73,18 @@ export const useCanvasInteraction = ({
   const panStartRef = useRef({ x: 0, y: 0 });
   const viewportContainerRef = useRef<HTMLDivElement>(null);
   const zoomAnimationRef = useRef<number | null>(null);
+  
+  // Refs for deferred drag position commits
+  const dragPositionRef = useRef<{ x: number; y: number } | null>(null);
+  const dragRafRef = useRef<number | null>(null);
+  
+  // Refs for current values (to avoid stale closures in animations)
+  const zoomRef = useRef(state.zoom);
+  const canvasOffsetRef = useRef(state.canvasOffset);
+  
+  // Keep refs in sync with state
+  zoomRef.current = state.zoom;
+  canvasOffsetRef.current = state.canvasOffset;
 
   // State updates
   const updateState = useCallback(
@@ -90,6 +104,7 @@ export const useCanvasInteraction = ({
       isPointerDown: false,
       hasMoved: false,
       isSpacePressed: false,
+      visualDragPosition: null,
     });
     onShapeSelect(null);
   }, [onShapeSelect]);
@@ -106,8 +121,9 @@ export const useCanvasInteraction = ({
         cancelAnimationFrame(zoomAnimationRef.current);
       }
 
-      const startZoom = state.zoom;
-      const startOffset = { ...state.canvasOffset };
+      // Read current values from refs at animation start (not from stale closure)
+      const startZoom = zoomRef.current;
+      const startOffset = { ...canvasOffsetRef.current };
       const startTime = performance.now();
 
       const animate = (currentTime: number) => {
@@ -142,7 +158,7 @@ export const useCanvasInteraction = ({
 
       zoomAnimationRef.current = requestAnimationFrame(animate);
     },
-    [state.zoom, state.canvasOffset, updateState]
+    [updateState]
   );
 
   // Handle space key for panning
@@ -206,24 +222,24 @@ export const useCanvasInteraction = ({
       e.preventDefault();
 
       const currentTime = Date.now();
-      const isDoubleClick = currentTime - lastClickTime < DOUBLE_CLICK_DELAY;
-      setLastClickTime(currentTime);
+      const isDoubleClick = currentTime - lastClickTimeRef.current < DOUBLE_CLICK_DELAY;
+      lastClickTimeRef.current = currentTime;
 
       // Handle touch events
       if ('touches' in e) {
         const touchCenter = getTouchCenter(e.touches);
-        setPointerStartPos({ x: touchCenter.x, y: touchCenter.y });
+        pointerStartPosRef.current = { x: touchCenter.x, y: touchCenter.y };
 
         if (e.touches.length === 2) {
           // Two-finger touch - prepare for pinch zoom
-          setTouchState({
+          touchStateRef.current = {
             lastTouchDistance: 0, // Will be set in first move event
             initialZoom: state.zoom,
             initialOffset: state.canvasOffset,
             lastPinchTime: currentTime,
             pinchVelocity: 0,
             velocityHistory: [],
-          });
+          };
           updateState({
             isPanning: true,
             isPointerDown: true,
@@ -233,7 +249,7 @@ export const useCanvasInteraction = ({
         }
       } else {
         // Mouse events
-        setPointerStartPos({ x: e.clientX, y: e.clientY });
+        pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
       }
 
       updateState({ isPointerDown: true, hasMoved: false });
@@ -283,7 +299,6 @@ export const useCanvasInteraction = ({
       state.zoom,
       state.isSpacePressed,
       hitTest,
-      lastClickTime,
       onShapeSelect,
       updateState,
       smoothZoom,
@@ -307,11 +322,11 @@ export const useCanvasInteraction = ({
           const currentDistance = getTouchDistance(e.touches);
           const currentTime = performance.now();
 
-          if (touchState.lastTouchDistance > 0) {
+          if (touchStateRef.current.lastTouchDistance > 0) {
             // Calculate velocity-based zoom
             const distanceChange =
-              currentDistance - touchState.lastTouchDistance;
-            const timeChange = currentTime - touchState.lastPinchTime;
+              currentDistance - touchStateRef.current.lastTouchDistance;
+            const timeChange = currentTime - touchStateRef.current.lastPinchTime;
 
             if (timeChange > 0) {
               // Calculate instantaneous velocity (pixels per millisecond)
@@ -319,7 +334,7 @@ export const useCanvasInteraction = ({
 
               // Add to velocity history for smoothing
               const newVelocityHistory = [
-                ...touchState.velocityHistory,
+                ...touchStateRef.current.velocityHistory,
                 { distance: currentDistance, time: currentTime },
               ].slice(-5); // Keep last 5 samples for smoothing
 
@@ -349,7 +364,7 @@ export const useCanvasInteraction = ({
 
               // Combine with distance-based zoom for stability
               const distanceRatio =
-                currentDistance / touchState.lastTouchDistance;
+                currentDistance / touchStateRef.current.lastTouchDistance;
               const distanceZoomDelta = (distanceRatio - 1) * 8.0; // Much more aggressive - 8x multiplier!
 
               // Final zoom delta combines both velocity and distance
@@ -377,24 +392,24 @@ export const useCanvasInteraction = ({
               });
 
               // Update touch state with new velocity data
-              setTouchState((prev) => ({
-                ...prev,
+              touchStateRef.current = {
+                ...touchStateRef.current,
                 lastTouchDistance: currentDistance,
                 lastPinchTime: currentTime,
                 pinchVelocity: smoothedVelocity,
                 velocityHistory: newVelocityHistory,
-              }));
+              };
             }
           } else {
             // Initialize for first measurement
-            setTouchState((prev) => ({
-              ...prev,
+            touchStateRef.current = {
+              ...touchStateRef.current,
               lastTouchDistance: currentDistance,
               lastPinchTime: currentTime,
               velocityHistory: [
                 { distance: currentDistance, time: currentTime },
               ],
-            }));
+            };
           }
           return;
         } else {
@@ -407,8 +422,8 @@ export const useCanvasInteraction = ({
         clientY = e.clientY;
       }
 
-      const deltaX = clientX - pointerStartPos.x;
-      const deltaY = clientY - pointerStartPos.y;
+      const deltaX = clientX - pointerStartPosRef.current.x;
+      const deltaY = clientY - pointerStartPosRef.current.y;
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
       if (distance > DRAG_THRESHOLD) {
@@ -502,7 +517,18 @@ export const useCanvasInteraction = ({
             y: Math.round(tentativePos.y),
           };
 
-          onShapeMove(selectedShapeId, finalPos);
+          // Store position in ref (no React re-render triggered)
+          dragPositionRef.current = finalPos;
+          
+          // Batch visual updates via RAF for smooth rendering
+          if (!dragRafRef.current) {
+            dragRafRef.current = requestAnimationFrame(() => {
+              dragRafRef.current = null;
+              if (dragPositionRef.current) {
+                updateState({ visualDragPosition: dragPositionRef.current });
+              }
+            });
+          }
         }
       } else if (shouldPan && state.hasMoved) {
         // Canvas panning (improved for smoother feel)
@@ -521,9 +547,6 @@ export const useCanvasInteraction = ({
       state,
       selectedShapeId,
       shapes,
-      pointerStartPos,
-      touchState,
-      onShapeMove,
       updateState,
     ]
   );
@@ -531,6 +554,18 @@ export const useCanvasInteraction = ({
   // Handle pointer up
   const handlePointerUp = useCallback(
     (_e: MouseEvent | TouchEvent) => {
+      // Commit final drag position only on pointer up (deferred from handlePointerMove)
+      if (state.isDraggingShape && selectedShapeId && dragPositionRef.current) {
+        onShapeMove(selectedShapeId, dragPositionRef.current);
+        dragPositionRef.current = null;
+      }
+      
+      // Cancel any pending RAF for visual drag updates
+      if (dragRafRef.current) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      
       if (
         !state.hasMoved &&
         !state.isDraggingShape &&
@@ -549,13 +584,14 @@ export const useCanvasInteraction = ({
         isDraggingShape: false,
         snappingGuides: [],
         hasMoved: false,
+        visualDragPosition: null,
       });
-      setTouchState((prev) => ({
-        ...prev,
+      touchStateRef.current = {
+        ...touchStateRef.current,
         lastTouchDistance: 0,
         pinchVelocity: 0,
         velocityHistory: [],
-      }));
+      };
 
       // Reset cursor
       if (viewportContainerRef.current) {
@@ -571,13 +607,14 @@ export const useCanvasInteraction = ({
       state.isSpacePressed,
       selectedShapeId,
       onShapeSelect,
+      onShapeMove,
       updateState,
     ]
   );
 
-  // Enhanced wheel zoom (Figma-like)
-  const handleWheelZoom = useCallback(
-    (e: React.WheelEvent) => {
+  // Enhanced wheel zoom (Figma-like) - internal handler for native wheel events
+  const handleWheelZoomInternal = useCallback(
+    (e: WheelEvent) => {
       if (!viewportContainerRef.current) return;
 
       // Always prevent default to stop browser zoom
@@ -649,7 +686,7 @@ export const useCanvasInteraction = ({
         });
       }
     },
-    [state.zoom, state.canvasOffset, updateState, smoothZoom]
+    [state.zoom, state.canvasOffset, updateState]
   );
 
   // Handle gesture events (for Safari)
@@ -718,20 +755,34 @@ export const useCanvasInteraction = ({
     }
   }, [state.isPointerDown, handlePointerMove, handlePointerUp]);
 
-  // Cleanup animation on unmount
+  // Cleanup animations on unmount
   useEffect(() => {
     return () => {
       if (zoomAnimationRef.current) {
         cancelAnimationFrame(zoomAnimationRef.current);
       }
+      if (dragRafRef.current) {
+        cancelAnimationFrame(dragRafRef.current);
+      }
     };
   }, []);
+
+  // Consolidated wheel event handling - attached directly to the container
+  useEffect(() => {
+    const container = viewportContainerRef.current;
+    if (!container) return;
+
+    container.addEventListener('wheel', handleWheelZoomInternal, { passive: false });
+
+    return () => {
+      container.removeEventListener('wheel', handleWheelZoomInternal);
+    };
+  }, [handleWheelZoomInternal]);
 
   return {
     ...state,
     viewportContainerRef,
     handlePointerDown,
-    handleWheelZoom,
     resetView,
   };
 };

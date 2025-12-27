@@ -109,8 +109,8 @@ export default function PixelShapeGenerator() {
         snappingGuides={canvasInteraction.snappingGuides}
         isDraggingShape={canvasInteraction.isDraggingShape}
         isPanning={canvasInteraction.isPanning}
+        visualDragPosition={canvasInteraction.visualDragPosition}
         onPointerDown={canvasInteraction.handlePointerDown}
-        onWheel={canvasInteraction.handleWheelZoom}
         onResetView={() => {
           canvasInteraction.resetView();
           shapeManagement.resetFormToDefaults();

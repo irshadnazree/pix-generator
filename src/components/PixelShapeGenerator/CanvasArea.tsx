@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import type { ShapeData, SnappingGuide } from "../../constants/pixel-shape";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useViewportSize } from "../../hooks/pixel-shape";
@@ -14,8 +14,8 @@ interface CanvasAreaProps {
 	snappingGuides: SnappingGuide[];
 	isDraggingShape: boolean;
 	isPanning: boolean;
+	visualDragPosition: { x: number; y: number } | null;
 	onPointerDown: (e: React.MouseEvent | React.TouchEvent) => void;
-	onWheel: (e: React.WheelEvent) => void;
 	onResetView: () => void;
 }
 
@@ -29,8 +29,8 @@ export const CanvasArea = React.memo<CanvasAreaProps>(
 		snappingGuides,
 		isDraggingShape,
 		isPanning,
+		visualDragPosition,
 		onPointerDown,
-		onWheel,
 		onResetView,
 	}) => {
 		const viewportSize = useViewportSize(viewportContainerRef);
@@ -41,37 +41,6 @@ export const CanvasArea = React.memo<CanvasAreaProps>(
 			if (isDraggingShape) return "move";
 			return "grab";
 		};
-
-		// Handle wheel events with proper preventDefault
-		useEffect(() => {
-			const container = viewportContainerRef.current;
-			if (!container) return;
-
-			const handleWheel = (e: WheelEvent) => {
-				// Create a React-like wheel event object
-				const syntheticEvent = {
-					preventDefault: () => e.preventDefault(),
-					stopPropagation: () => e.stopPropagation(),
-					clientX: e.clientX,
-					clientY: e.clientY,
-					deltaX: e.deltaX,
-					deltaY: e.deltaY,
-					deltaZ: e.deltaZ,
-					ctrlKey: e.ctrlKey,
-					shiftKey: e.shiftKey,
-					altKey: e.altKey,
-					metaKey: e.metaKey,
-				};
-
-				onWheel(syntheticEvent as React.WheelEvent);
-			};
-
-			container.addEventListener("wheel", handleWheel, { passive: false });
-
-			return () => {
-				container.removeEventListener("wheel", handleWheel);
-			};
-		}, [onWheel]);
 
 		return (
 			<div className="fixed inset-0 flex flex-col">
@@ -140,14 +109,25 @@ export const CanvasArea = React.memo<CanvasAreaProps>(
 							viewportHeight={viewportSize.height}
 						/>
 
-						{shapes.map((shape) => (
-							<PixelShapeDisplay
-								key={shape.id}
-								shapeData={shape}
-								zoom={zoom}
-								isSelected={selectedShapeId === shape.id}
-							/>
-						))}
+						{shapes.map((shape) => {
+							// Apply visual drag position during drag for smooth rendering
+							const isDragging =
+								isDraggingShape &&
+								selectedShapeId === shape.id &&
+								visualDragPosition;
+							const displayShape = isDragging
+								? { ...shape, position: visualDragPosition }
+								: shape;
+
+							return (
+								<PixelShapeDisplay
+									key={shape.id}
+									shapeData={displayShape}
+									zoom={zoom}
+									isSelected={selectedShapeId === shape.id}
+								/>
+							);
+						})}
 
 						{snappingGuides.map((guide) => (
 							<div
