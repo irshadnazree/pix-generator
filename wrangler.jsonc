@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "pixel-shape-gen",
+	"name": "pixelgen",
 	"main": "worker/index.ts",
 	"compatibility_date": "2025-05-24",
 	"assets": {
