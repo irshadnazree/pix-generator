@@ -1,7 +1,7 @@
 import type { RefObject } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import type { ShapeData } from '../constants/pixel-shape';
-import { createShapeMask } from '../utils/pixel-shape';
+import { getCachedMask } from '../utils/pixel-shape';
 
 // Custom hook for viewport size
 export const useViewportSize = (containerRef: RefObject<HTMLDivElement | null>) => {
@@ -43,7 +43,7 @@ export const useShapeHitTest = (shapes: ShapeData[]) => {
           localY >= 0 &&
           localY < shape.height
         ) {
-          const mask = createShapeMask(shape.type, shape.width, shape.height);
+          const mask = getCachedMask(shape.type, shape.width, shape.height);
           const maskX = Math.floor(localX);
           const maskY = Math.floor(localY);
 

@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ShapeData, ShapeType } from '../constants/pixel-shape';
 
+// Normalized shape state for O(1) lookups and updates
+interface NormalizedShapes {
+  ids: number[];
+  entities: Record<number, ShapeData>;
+}
+
 export const useShapeManagement = () => {
-  // Shape data
-  const [shapes, setShapes] = useState<ShapeData[]>([]);
+  // Normalized shape data - O(1) lookups and efficient updates
+  const [shapeState, setShapeState] = useState<NormalizedShapes>({
+    ids: [],
+    entities: {},
+  });
   const [selectedShapeId, setSelectedShapeId] = useState<number | null>(null);
 
   // Form state
@@ -14,11 +23,18 @@ export const useShapeManagement = () => {
   const [currentShapeBaseColor, setCurrentShapeBaseColor] = useState('#007BFF');
   const [currentShapeOpacity, setCurrentShapeOpacity] = useState(1);
 
-  // Computed values
-  const selectedShapeObject = useMemo(
-    () => shapes.find((s) => s.id === selectedShapeId),
-    [shapes, selectedShapeId]
+  // Denormalized shapes array for consumers (memoized)
+  const shapes = useMemo(
+    () => shapeState.ids.map((id) => shapeState.entities[id]),
+    [shapeState.ids, shapeState.entities]
   );
+
+  // Selected shape object (O(1) lookup)
+  const selectedShapeObject = useMemo(
+    () => (selectedShapeId ? shapeState.entities[selectedShapeId] : undefined),
+    [shapeState.entities, selectedShapeId]
+  );
+
   const isEditing = selectedShapeId !== null;
 
   // Reset form to default values
@@ -100,7 +116,7 @@ export const useShapeManagement = () => {
     return errors;
   }, [width, height]);
 
-  // Shape operations - these will be called with position from canvas interaction
+  // Shape operations
   const addShape = useCallback(
     (position: { x: number; y: number }) => {
       const validationErrors = validateDimensions();
@@ -121,7 +137,10 @@ export const useShapeManagement = () => {
         position: { x: Math.round(position.x), y: Math.round(position.y) },
       };
 
-      setShapes((prev) => [...prev, newShape]);
+      setShapeState((prev) => ({
+        ids: [...prev.ids, newShapeId],
+        entities: { ...prev.entities, [newShapeId]: newShape },
+      }));
       resetFormToDefaults();
     },
     [
@@ -145,19 +164,24 @@ export const useShapeManagement = () => {
       return;
     }
 
-    setShapes((prevShapes) =>
-      prevShapes.map((s) =>
-        s.id === selectedShapeId
-          ? {
-              ...s,
-              width: width!,
-              height: height!,
-              baseColor: currentShapeBaseColor,
-              opacity: currentShapeOpacity,
-            }
-          : s
-      )
-    );
+    setShapeState((prev) => {
+      const existingShape = prev.entities[selectedShapeId];
+      if (!existingShape) return prev;
+
+      return {
+        ...prev,
+        entities: {
+          ...prev.entities,
+          [selectedShapeId]: {
+            ...existingShape,
+            width: width!,
+            height: height!,
+            baseColor: currentShapeBaseColor,
+            opacity: currentShapeOpacity,
+          },
+        },
+      };
+    });
     resetFormToDefaults();
   }, [
     selectedShapeId,
@@ -183,7 +207,13 @@ export const useShapeManagement = () => {
 
   const removeShape = useCallback(
     (id: number) => {
-      setShapes((prev) => prev.filter((s) => s.id !== id));
+      setShapeState((prev) => {
+        const { [id]: removed, ...remainingEntities } = prev.entities;
+        return {
+          ids: prev.ids.filter((shapeId) => shapeId !== id),
+          entities: remainingEntities,
+        };
+      });
       if (selectedShapeId === id) {
         resetFormToDefaults();
       }
@@ -191,60 +221,74 @@ export const useShapeManagement = () => {
     [selectedShapeId, resetFormToDefaults]
   );
 
+  // O(1) position update - only modifies the specific entity
   const moveShape = useCallback(
     (id: number, position: { x: number; y: number }) => {
-      setShapes((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, position } : s))
-      );
-    },
-    []
-  );
+      setShapeState((prev) => {
+        const existingShape = prev.entities[id];
+        if (!existingShape) return prev;
 
-  const handleMoveShapeLayer = useCallback(
-    (shapeId: number, direction: string) => {
-      setShapes((prevShapes) => {
-        const currentIndex = prevShapes.findIndex((s) => s.id === shapeId);
-        if (currentIndex === -1) return prevShapes;
-
-        const newShapes = [...prevShapes];
-        const [shapeToMove] = newShapes.splice(currentIndex, 1);
-
-        switch (direction) {
-          case 'toFront':
-            newShapes.push(shapeToMove);
-            break;
-          case 'toBack':
-            newShapes.unshift(shapeToMove);
-            break;
-          case 'forward':
-            newShapes.splice(
-              Math.min(prevShapes.length - 1, currentIndex + 1),
-              0,
-              shapeToMove
-            );
-            break;
-          case 'backward':
-            newShapes.splice(Math.max(0, currentIndex - 1), 0, shapeToMove);
-            break;
-        }
-
-        return newShapes;
+        return {
+          ...prev,
+          entities: {
+            ...prev.entities,
+            [id]: { ...existingShape, position },
+          },
+        };
       });
     },
     []
   );
 
+  // Layer operations - only modify ids array, entities stay untouched
+  const handleMoveShapeLayer = useCallback(
+    (shapeId: number, direction: string) => {
+      setShapeState((prev) => {
+        const currentIndex = prev.ids.indexOf(shapeId);
+        if (currentIndex === -1) return prev;
+
+        const newIds = [...prev.ids];
+        newIds.splice(currentIndex, 1);
+
+        switch (direction) {
+          case 'toFront':
+            newIds.push(shapeId);
+            break;
+          case 'toBack':
+            newIds.unshift(shapeId);
+            break;
+          case 'forward':
+            newIds.splice(
+              Math.min(prev.ids.length - 1, currentIndex + 1),
+              0,
+              shapeId
+            );
+            break;
+          case 'backward':
+            newIds.splice(Math.max(0, currentIndex - 1), 0, shapeId);
+            break;
+          default:
+            newIds.splice(currentIndex, 0, shapeId); // No change
+        }
+
+        return { ...prev, ids: newIds };
+      });
+    },
+    []
+  );
+
+  // Reorder - only modify ids array
   const reorderShapes = useCallback((fromIndex: number, toIndex: number) => {
-    setShapes((prevShapes) => {
-      const newShapes = [...prevShapes];
-      const [movedShape] = newShapes.splice(fromIndex, 1);
-      newShapes.splice(toIndex, 0, movedShape);
-      return newShapes;
+    setShapeState((prev) => {
+      const newIds = [...prev.ids];
+      const [movedId] = newIds.splice(fromIndex, 1);
+      newIds.splice(toIndex, 0, movedId);
+      return { ...prev, ids: newIds };
     });
   }, []);
 
   return {
-    // Shape data
+    // Shape data (denormalized for consumers)
     shapes,
     selectedShapeId,
     selectedShapeObject,

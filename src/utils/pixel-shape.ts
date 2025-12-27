@@ -1,5 +1,27 @@
 import type { ShapeType } from '../constants/pixel-shape';
 
+// Shape mask cache - stores computed masks to avoid recalculation
+const maskCache = new Map<string, boolean[][]>();
+
+/**
+ * Returns a cached shape mask, computing it only if not already cached.
+ * This significantly reduces CPU usage during hit-testing and rendering.
+ */
+export const getCachedMask = (
+  shapeType: ShapeType,
+  width: number,
+  height: number
+): boolean[][] => {
+  const key = `${shapeType}-${width}-${height}`;
+  
+  const cached = maskCache.get(key);
+  if (cached) return cached;
+  
+  const mask = createShapeMask(shapeType, width, height);
+  maskCache.set(key, mask);
+  return mask;
+};
+
 // Helper function to darken a HEX color and apply opacity
 export const darkenColor = (hexColor: string, percent: number, alpha = 1): string => {
   if (!hexColor) return `rgba(0,0,0,${alpha})`;

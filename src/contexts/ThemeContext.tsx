@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+import type React from "react";
 
 interface ThemeContextType {
   isDarkMode: boolean;
@@ -18,14 +19,18 @@ export const useTheme = () => {
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    // Check localStorage first, then system preference
+  // Initialize with default value (SSR-safe)
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // Client-side initialization - check localStorage and system preference
+  useEffect(() => {
     const stored = localStorage.getItem("dark-mode");
     if (stored !== null) {
-      return stored === "true";
+      setIsDarkMode(stored === "true");
+    } else if (window.matchMedia) {
+      setIsDarkMode(window.matchMedia("(prefers-color-scheme: dark)").matches);
     }
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  });
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("dark-mode", isDarkMode.toString());

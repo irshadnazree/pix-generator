@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef } from "react";
 
 import type { ShapeData } from "../../constants/pixel-shape";
 import {
-  createShapeMask,
   darkenColor,
+  getCachedMask,
   isOutlinePixel,
 } from "../../utils/pixel-shape";
 
@@ -23,7 +23,7 @@ const drawShapeToCanvas = (
   shapeData: ShapeData
 ) => {
   const { type, width, height, baseColor, opacity } = shapeData;
-  const mask = createShapeMask(type, width, height);
+  const mask = getCachedMask(type, width, height);
   const outlineColor = darkenColor(baseColor, 0.3, opacity);
 
   // Clear canvas
